@@ -1,51 +1,8 @@
 from PIL import Image
 
 from alignment_pattern_utils import render_alignment_pattern
+from constants import QR_CAPACITY_BYTE_MODE, MODE_INDICATORS
 
-# QR Code data capacity table for Byte mode (characters)
-# Format: version -> {error_correction_level -> capacity}
-QR_CAPACITY_BYTE_MODE = {
-    1: {'L': 17, 'M': 14, 'Q': 11, 'H': 7},
-    2: {'L': 32, 'M': 26, 'Q': 20, 'H': 14},
-    3: {'L': 53, 'M': 42, 'Q': 32, 'H': 24},
-    4: {'L': 78, 'M': 62, 'Q': 46, 'H': 34},
-    5: {'L': 106, 'M': 84, 'Q': 60, 'H': 44},
-    6: {'L': 134, 'M': 106, 'Q': 74, 'H': 58},
-    7: {'L': 154, 'M': 122, 'Q': 86, 'H': 64},
-    8: {'L': 192, 'M': 152, 'Q': 108, 'H': 84},
-    9: {'L': 230, 'M': 180, 'Q': 130, 'H': 98},
-    10: {'L': 271, 'M': 213, 'Q': 151, 'H': 119},
-    11: {'L': 321, 'M': 251, 'Q': 177, 'H': 137},
-    12: {'L': 367, 'M': 287, 'Q': 203, 'H': 155},
-    13: {'L': 425, 'M': 331, 'Q': 241, 'H': 177},
-    14: {'L': 458, 'M': 362, 'Q': 258, 'H': 194},
-    15: {'L': 520, 'M': 412, 'Q': 292, 'H': 220},
-    16: {'L': 586, 'M': 450, 'Q': 322, 'H': 250},
-    17: {'L': 644, 'M': 504, 'Q': 364, 'H': 280},
-    18: {'L': 718, 'M': 560, 'Q': 394, 'H': 310},
-    19: {'L': 792, 'M': 624, 'Q': 442, 'H': 338},
-    20: {'L': 858, 'M': 666, 'Q': 482, 'H': 382},
-    21: {'L': 929, 'M': 711, 'Q': 509, 'H': 403},
-    22: {'L': 1003, 'M': 779, 'Q': 565, 'H': 439},
-    23: {'L': 1091, 'M': 857, 'Q': 611, 'H': 461},
-    24: {'L': 1171, 'M': 911, 'Q': 661, 'H': 511},
-    25: {'L': 1273, 'M': 997, 'Q': 715, 'H': 535},
-    26: {'L': 1367, 'M': 1059, 'Q': 751, 'H': 593},
-    27: {'L': 1465, 'M': 1125, 'Q': 805, 'H': 625},
-    28: {'L': 1528, 'M': 1190, 'Q': 868, 'H': 658},
-    29: {'L': 1628, 'M': 1264, 'Q': 908, 'H': 698},
-    30: {'L': 1732, 'M': 1370, 'Q': 982, 'H': 742},
-    31: {'L': 1840, 'M': 1452, 'Q': 1030, 'H': 790},
-    32: {'L': 1952, 'M': 1538, 'Q': 1112, 'H': 842},
-    33: {'L': 2068, 'M': 1628, 'Q': 1168, 'H': 898},
-    34: {'L': 2188, 'M': 1722, 'Q': 1228, 'H': 958},
-    35: {'L': 2303, 'M': 1809, 'Q': 1283, 'H': 983},
-    36: {'L': 2431, 'M': 1911, 'Q': 1351, 'H': 1051},
-    37: {'L': 2563, 'M': 1989, 'Q': 1423, 'H': 1093},
-    38: {'L': 2699, 'M': 2099, 'Q': 1499, 'H': 1139},
-    39: {'L': 2809, 'M': 2213, 'Q': 1579, 'H': 1219},
-    40: {'L': 2953, 'M': 2331, 'Q': 1663, 'H': 1273},
-}
 
 def get_minimum_version(txt, error_correction='L'):
     text_length = len(txt)
@@ -56,6 +13,39 @@ def get_minimum_version(txt, error_correction='L'):
             return version
     
     raise ValueError(f"Text is too long ({text_length} bytes). Maximum capacity is {QR_CAPACITY_BYTE_MODE[40][error_correction]} bytes for error correction level {error_correction}.")
+
+def add_padding(bit_string, version, error_correction='L'):
+    # Calculate total capacity in bits (capacity in bytes * 8 bits per byte)
+    capacity_bytes = QR_CAPACITY_BYTE_MODE[version][error_correction]
+    capacity_bits = capacity_bytes * 8
+    
+    current_length = len(bit_string)
+    
+    # Check if data already fits
+    if current_length > capacity_bits:
+        raise ValueError(f"Data length ({current_length} bits) exceeds capacity ({capacity_bits} bits)")
+    
+    # Step 1: Add up to 4 terminator bits (already included in bit_string usually)
+    # Step 2: Add 0s to make the length a multiple of 8
+    remainder = current_length % 8
+    if remainder != 0:
+        padding_bits = 8 - remainder
+        bit_string += '0' * padding_bits
+        current_length += padding_bits
+    
+    # Step 3: Add padding bytes (alternating 11101100 and 00010001)
+    padding_byte_1 = '11101100'  # 0xEC (236)
+    padding_byte_2 = '00010001'  # 0x11 (17)
+    
+    bytes_needed = (capacity_bits - current_length) // 8
+    
+    for i in range(bytes_needed):
+        if i % 2 == 0:
+            bit_string += padding_byte_1
+        else:
+            bit_string += padding_byte_2
+    
+    return bit_string
 
 def get_module_count(matrix):
     return len(matrix)
@@ -144,7 +134,20 @@ if __name__ == "__main__":
         render_alignment_pattern(matrix, version)
     
     # Parse data
+    mode = MODE_INDICATORS['byte']
+    count = format(len(txt), '08b')
     txt_stream = ''.join(format(ord(char), '08b') for char in txt)
+    terminator = MODE_INDICATORS['terminator']
+    
+    # Build the encoded data
+    encoded_data = mode + count + txt_stream + terminator
+    
+    # Add padding to fill the QR code capacity
+    padded_data = add_padding(encoded_data, version, error_correction)
+    
+    print(f"Padded bit string: {padded_data}")
+
+
 
     # Draw QR Code
     img = draw_matrix(matrix)
