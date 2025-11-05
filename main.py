@@ -118,6 +118,70 @@ def render_timing_pattern(matrix):
         matrix[i][6] = 1 if i % 2 == 0 else 0
         matrix[6][i] = 1 if i % 2 == 0 else 0
 
+def is_reserved(matrix, row, col):
+    """Check if a module position is reserved (already used by patterns)"""
+    size = len(matrix)
+    
+    # Top-left
+    if row < 9 and col < 9:
+        return True
+    # Top-right
+    if row < 9 and col >= size - 8:
+        return True
+    # Bottom-left
+    if row >= size - 8 and col < 9:
+        return True
+    
+    # Timing patterns (row 6 and column 6)
+    if row == 6 or col == 6:
+        return True
+    
+    return False
+
+def embed_data(matrix, bit_string):
+    """
+    Embed the data bit string into the QR code matrix.
+    Data is placed in a zigzag pattern starting from bottom-right.
+    """
+    size = len(matrix)
+    bit_index = 0
+    
+    # Start from the rightmost column
+    col = size - 1
+    direction = -1  # -1 for going up, 1 for going down
+    
+    while col > 0 and bit_index < len(bit_string):
+        # Skip the vertical timing column (column 6)
+        if col == 6:
+            col -= 1
+        
+        # Process two columns at a time (right column, then left column)
+        for row in range(size):
+            # Calculate actual row based on direction
+            if direction == -1:
+                actual_row = size - 1 - row
+            else:
+                actual_row = row
+            
+            # Process right column of the pair
+            if not is_reserved(matrix, actual_row, col):
+                if bit_index < len(bit_string):
+                    matrix[actual_row][col] = int(bit_string[bit_index])
+                    bit_index += 1
+            
+            # Process left column of the pair
+            if not is_reserved(matrix, actual_row, col - 1):
+                if bit_index < len(bit_string):
+                    matrix[actual_row][col - 1] = int(bit_string[bit_index])
+                    bit_index += 1
+        
+        # Move to the next pair of columns (2 columns to the left)
+        col -= 2
+        # Reverse direction for zigzag pattern
+        direction *= -1
+    
+    return matrix
+
 if __name__ == "__main__":
     txt = "Hello, world."
     error_correction = 'L'  # Options: 'L', 'M', 'Q', 'H'
@@ -145,9 +209,10 @@ if __name__ == "__main__":
     # Add padding to fill the QR code capacity
     padded_data = add_padding(encoded_data, version, error_correction)
     
-    print(f"Padded bit string: {padded_data}")
-
-
+    print(f"Padded bit string length: {len(padded_data)} bits")
+    
+    # Embed the data into the QR code matrix
+    embed_data(matrix, padded_data)
 
     # Draw QR Code
     img = draw_matrix(matrix)
