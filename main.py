@@ -182,6 +182,157 @@ def embed_data(matrix, bit_string):
     
     return matrix
 
+def get_mask_pattern(pattern_number, row, col):
+    if pattern_number == 0:
+        return (row + col) % 2 == 0
+    elif pattern_number == 1:
+        return row % 2 == 0
+    elif pattern_number == 2:
+        return col % 3 == 0
+    elif pattern_number == 3:
+        return (row + col) % 3 == 0
+    elif pattern_number == 4:
+        return (row // 2 + col // 3) % 2 == 0
+    elif pattern_number == 5:
+        return ((row * col) % 2) + ((row * col) % 3) == 0
+    elif pattern_number == 6:
+        return (((row * col) % 2) + ((row * col) % 3)) % 2 == 0
+    elif pattern_number == 7:
+        return (((row + col) % 2) + ((row * col) % 3)) % 2 == 0
+    else:
+        raise ValueError(f"Invalid mask pattern number: {pattern_number}. Must be 0-7.")
+
+def is_data_module(matrix, row, col):
+    size = len(matrix)
+    
+    # Finder patterns with separators (8x8 areas)
+    # Top-left
+    if row < 9 and col < 9:
+        return False
+    # Top-right
+    if row < 9 and col >= size - 8:
+        return False
+    # Bottom-left
+    if row >= size - 8 and col < 9:
+        return False
+    
+    # Timing patterns (row 6 and column 6)
+    if row == 6 or col == 6:
+        return False
+    
+    # Format information areas (will be added later)
+    # These are around the finder patterns
+    
+    # Alignment patterns (for version 2+, will need to check specific positions)
+    # For now, we'll handle this simply
+    
+    return True
+
+def apply_mask(matrix, pattern_number):
+    import copy
+    size = len(matrix)
+    masked_matrix = copy.deepcopy(matrix)
+    
+    for row in range(size):
+        for col in range(size):
+            # Only apply mask to data modules
+            if is_data_module(masked_matrix, row, col):
+                if get_mask_pattern(pattern_number, row, col):
+                    # XOR operation: flip the bit
+                    masked_matrix[row][col] = 1 - masked_matrix[row][col]
+    
+    return masked_matrix
+
+def evaluate_mask_penalty(matrix):
+    size = len(matrix)
+    penalty = 0
+    
+    # Rule 1: Adjacent modules in same row/column
+    # Penalty for runs of 5+ same-color modules
+    for row in range(size):
+        # Check horizontal runs
+        count = 1
+        prev = matrix[row][0]
+        for col in range(1, size):
+            if matrix[row][col] == prev:
+                count += 1
+            else:
+                if count >= 5:
+                    penalty += (count - 5) + 3
+                count = 1
+                prev = matrix[row][col]
+        if count >= 5:
+            penalty += (count - 5) + 3
+    
+    for col in range(size):
+        # Check vertical runs
+        count = 1
+        prev = matrix[0][col]
+        for row in range(1, size):
+            if matrix[row][col] == prev:
+                count += 1
+            else:
+                if count >= 5:
+                    penalty += (count - 5) + 3
+                count = 1
+                prev = matrix[row][col]
+        if count >= 5:
+            penalty += (count - 5) + 3
+    
+    # Rule 2: 2x2 blocks of same color
+    for row in range(size - 1):
+        for col in range(size - 1):
+            color = matrix[row][col]
+            if (matrix[row][col + 1] == color and
+                matrix[row + 1][col] == color and
+                matrix[row + 1][col + 1] == color):
+                penalty += 3
+    
+    # Rule 3: Patterns similar to finder patterns (1:1:3:1:1 ratio)
+    # Simplified version - checking for specific pattern
+    finder_pattern_dark = [1, 0, 1, 1, 1, 0, 1]
+    finder_pattern_light = [0, 1, 0, 0, 0, 1, 0]
+    
+    # Check horizontal
+    for row in range(size):
+        for col in range(size - 6):
+            segment = [matrix[row][col + i] for i in range(7)]
+            if segment == finder_pattern_dark or segment == finder_pattern_light:
+                penalty += 40
+    
+    # Check vertical
+    for col in range(size):
+        for row in range(size - 6):
+            segment = [matrix[row + i][col] for i in range(7)]
+            if segment == finder_pattern_dark or segment == finder_pattern_light:
+                penalty += 40
+    
+    # Rule 4: Balance of dark and light modules
+    dark_count = sum(sum(row) for row in matrix)
+    total_modules = size * size
+    dark_ratio = (dark_count / total_modules) * 100
+    deviation = abs(dark_ratio - 50)
+    penalty += int(deviation / 5) * 10
+    
+    return penalty
+
+def choose_best_mask(matrix):
+    best_penalty = float('inf')
+    best_matrix = None
+    best_pattern = 0
+    
+    for pattern in range(8):
+        masked = apply_mask(matrix, pattern)
+        penalty = evaluate_mask_penalty(masked)
+        
+        if penalty < best_penalty:
+            best_penalty = penalty
+            best_matrix = masked
+            best_pattern = pattern
+    
+    print(f"Best mask pattern: {best_pattern} (penalty: {best_penalty})")
+    return best_matrix, best_pattern
+
 if __name__ == "__main__":
     txt = "Hello, world."
     error_correction = 'L'  # Options: 'L', 'M', 'Q', 'H'
@@ -213,8 +364,11 @@ if __name__ == "__main__":
     
     # Embed the data into the QR code matrix
     embed_data(matrix, padded_data)
+    
+    # Choose and apply the best mask pattern
+    masked_matrix, mask_pattern = choose_best_mask(matrix)
 
     # Draw QR Code
-    img = draw_matrix(matrix)
+    img = draw_matrix(masked_matrix)
     img.show()
 
