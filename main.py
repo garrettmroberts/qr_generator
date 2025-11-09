@@ -1,8 +1,154 @@
 from PIL import Image
 
 from alignment_pattern_utils import render_alignment_pattern
-from constants import QR_CAPACITY_BYTE_MODE, MODE_INDICATORS
+from constants import QR_CAPACITY_BYTE_MODE, MODE_INDICATORS, ECC_CODEWORDS_PER_BLOCK
 
+# Galois Field (GF(2^8)) Log and Antilog tables
+GF_EXP = [0] * 512
+GF_LOG = [0] * 256
+
+# Initialize the tables
+x = 1
+for i in range(255):
+    GF_EXP[i] = x
+    GF_LOG[x] = i
+    x <<= 1
+    if x & 0x100:
+        x ^= 0x11D  # Primitive polynomial for QR codes: x^8 + x^4 + x^3 + x^2 + 1
+
+# Mirror the EXP table for convenience
+for i in range(255, 512):
+    GF_EXP[i] = GF_EXP[i - 255]
+
+def gf_multiply(a, b):
+    """Multiply two numbers in GF(2^8)"""
+    if a == 0 or b == 0:
+        return 0
+    return GF_EXP[GF_LOG[a] + GF_LOG[b]]
+
+def gf_polynomial_multiply(p1, p2):
+    """Multiply two polynomials over GF(2^8)"""
+    product = [0] * (len(p1) + len(p2) - 1)
+    for i in range(len(p1)):
+        for j in range(len(p2)):
+            product[i + j] ^= gf_multiply(p1[i], p2[j])
+    return product
+
+def gf_polynomial_divide(dividend, divisor):
+    """Divide two polynomials over GF(2^8)"""
+    result = list(dividend)
+    for i in range(len(dividend) - len(divisor) + 1):
+        coef = result[i]
+        if coef != 0:
+            for j in range(1, len(divisor)):
+                result[i + j] ^= gf_multiply(divisor[j], coef)
+    
+    separator = -(len(divisor) - 1)
+    return result[separator:]
+
+def reed_solomon_generator(degree):
+    """Generate a Reed-Solomon generator polynomial of a given degree"""
+    poly = [1]
+    for i in range(degree):
+        poly = gf_polynomial_multiply(poly, [1, GF_EXP[i]])
+    return poly
+
+def reed_solomon_encode(data_bytes, num_ec_bytes):
+    """
+    Encode data with Reed-Solomon error correction.
+    
+    Args:
+        data_bytes (list[int]): The data codewords
+        num_ec_bytes (int): The number of error correction codewords to generate
+        
+    Returns:
+        list[int]: The error correction codewords
+    """
+    generator = reed_solomon_generator(num_ec_bytes)
+    
+    # Pad the data with zeros for division
+    padded_data = data_bytes + [0] * num_ec_bytes
+    
+    # Get the remainder (error correction codewords)
+    return gf_polynomial_divide(padded_data, generator)
+
+
+def generate_error_correction(padded_data, version, error_correction):
+    """
+    Generate and interleave error correction codewords.
+    
+    Returns:
+        str: The final bit string with data and error correction
+    """
+    # Convert bit string to byte array
+    data_bytes = [int(padded_data[i:i+8], 2) for i in range(0, len(padded_data), 8)]
+    
+    # Get block info
+    block_info = ECC_CODEWORDS_PER_BLOCK[version][error_correction]
+    num_ec_bytes_per_block = block_info[0]
+    
+    # Split blocks (Group 1 and Group 2)
+    group1_blocks = block_info[1]
+    group1_codewords = block_info[2]
+    
+    if len(block_info) > 3:
+        group2_blocks = block_info[3]
+        group2_codewords = block_info[4]
+    else:
+        group2_blocks = 0
+        group2_codewords = 0
+
+    total_data_codewords = group1_blocks * group1_codewords + group2_blocks * group2_codewords
+    
+    # Split data into blocks
+    data_blocks = []
+    start = 0
+    for i in range(group1_blocks):
+        end = start + group1_codewords
+        data_blocks.append(data_bytes[start:end])
+        start = end
+    
+    for i in range(group2_blocks):
+        end = start + group2_codewords
+        data_blocks.append(data_bytes[start:end])
+        start = end
+        
+    # Generate error correction for each block
+    ec_blocks = []
+    for block in data_blocks:
+        ec_blocks.append(reed_solomon_encode(block, num_ec_bytes_per_block))
+        
+    # Interleave data and error correction codewords
+    final_codewords = []
+    
+    # Interleave data
+    max_data_len = max(len(b) for b in data_blocks)
+    for i in range(max_data_len):
+        for block in data_blocks:
+            if i < len(block):
+                final_codewords.append(block[i])
+                
+    # Interleave error correction
+    max_ec_len = max(len(b) for b in ec_blocks)
+    for i in range(max_ec_len):
+        for block in ec_blocks:
+            if i < len(block):
+                final_codewords.append(block[i])
+
+    # Convert back to bit string
+    final_bit_string = ''.join(format(byte, '08b') for byte in final_codewords)
+    
+    # Add remainder bits if necessary
+    total_capacity_bits = (
+        (group1_blocks * group1_codewords) +
+        (group2_blocks * group2_codewords) +
+        (group1_blocks + group2_blocks) * num_ec_bytes_per_block
+    ) * 8
+    
+    if len(final_bit_string) < total_capacity_bits:
+         final_bit_string += '0' * (total_capacity_bits - len(final_bit_string))
+    
+    return final_bit_string
 
 def get_minimum_version(txt, error_correction='L'):
     text_length = len(txt)
@@ -360,10 +506,13 @@ if __name__ == "__main__":
     # Add padding to fill the QR code capacity
     padded_data = add_padding(encoded_data, version, error_correction)
     
-    print(f"Padded bit string length: {len(padded_data)} bits")
+    # Generate error correction and interleave
+    final_data = generate_error_correction(padded_data, version, error_correction)
+    
+    print(f"Final bit string length: {len(final_data)} bits")
     
     # Embed the data into the QR code matrix
-    embed_data(matrix, padded_data)
+    embed_data(matrix, final_data)
     
     # Choose and apply the best mask pattern
     masked_matrix, mask_pattern = choose_best_mask(matrix)
